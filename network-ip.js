@@ -1,5 +1,5 @@
-// Loon - Network IP Notification
-// Thông báo Public IP khi Wi-Fi / 4G / 5G thay đổi
+// Loon Network IP Test
+// Test lấy Public IP qua DIRECT
 
 var config = {};
 
@@ -9,7 +9,6 @@ try {
     config = {};
 }
 
-// Xác định loại mạng
 var ssid = config.ssid || "";
 
 var networkType;
@@ -20,62 +19,45 @@ if (!ssid || ssid.toLowerCase() === "cellular") {
     networkType = "Wi-Fi";
 }
 
-// Chờ mạng ổn định sau khi chuyển mạng
 setTimeout(function () {
 
     $httpClient.get({
-        url: "https://api64.ipify.org",
-        timeout: 10000
+        url: "https://api.ipify.org",
+        timeout: 10000,
+        node: "DIRECT"
     }, function (error, response, data) {
 
-        // Request lỗi
         if (error) {
+
             $notification.post(
                 "Loon",
                 networkType,
-                "Lỗi kết nối IP: " + error
+                "HTTP ERROR\n" + String(error)
             );
 
             $done();
             return;
         }
 
-        // Kiểm tra response
-        if (!data) {
+        var status = response ? response.status : "UNKNOWN";
+        var body = data ? String(data).trim() : "";
+
+        if (!body) {
+
             $notification.post(
                 "Loon",
                 networkType,
-                "API không trả về dữ liệu"
+                "HTTP " + status + "\nResponse rỗng"
             );
 
             $done();
             return;
         }
 
-        // Lấy IP dạng text
-        var ip = String(data).trim();
-
-        // Kiểm tra IP có hợp lệ tương đối
-        if (
-            ip.length < 7 ||
-            ip.indexOf("<") !== -1 ||
-            ip.indexOf("{") !== -1
-        ) {
-            $notification.post(
-                "Loon",
-                networkType,
-                "Dữ liệu IP không hợp lệ: " + ip.substring(0, 100)
-            );
-
-            $done();
-            return;
-        }
-
-        // Thành công
         $notification.post(
             "Loon",
             networkType,
-            "Public IP: " + ip
+            "HTTP " + status + "\nIP: " + body
         );
 
         $done();
