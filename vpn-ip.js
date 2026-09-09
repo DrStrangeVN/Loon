@@ -1,16 +1,16 @@
 // Loon VPN Monitor
-// Chỉ thông báo khi VPN chuyển OFF -> ON
+// Chỉ báo khi VPN chuyển OFF -> ON
 
 var STATE_KEY = "Loon_VPN_State";
+var NETWORK_CHANGE_KEY = "Loon_Network_Changed";
 
-function getNetwork() {
+function getNetworkType() {
+
     var config = {};
 
     try {
         config = JSON.parse($config.getConfig() || "{}");
-    } catch (e) {
-        config = {};
-    }
+    } catch (e) {}
 
     var ssid = String(config.ssid || "");
 
@@ -22,9 +22,9 @@ function getNetwork() {
 }
 
 
-// ==========================================
-// Lấy IP
-// ==========================================
+// ========================================
+// Get IP
+// ========================================
 
 function getIP(direct, callback) {
 
@@ -33,13 +33,11 @@ function getIP(direct, callback) {
         timeout: 5000
     };
 
-    // DIRECT = IP mạng thật
-    // Không có node = route hiện tại của Loon
     if (direct) {
         options.node = "DIRECT";
     }
 
-    $httpClient.get(options, function (error, response, data) {
+    $httpClient.get(options, function(error, response, data) {
 
         if (error || !data) {
             callback(null);
@@ -58,15 +56,15 @@ function getIP(direct, callback) {
 }
 
 
-// ==========================================
+// ========================================
 // Main
-// ==========================================
+// ========================================
 
-var network = getNetwork();
+var network = getNetworkType();
 
 
-// IP mạng thật
-getIP(true, function (networkIP) {
+// IP thật
+getIP(true, function(networkIP) {
 
     if (!networkIP) {
         $done();
@@ -74,8 +72,8 @@ getIP(true, function (networkIP) {
     }
 
 
-    // IP theo route hiện tại của Loon
-    getIP(false, function (loonIP) {
+    // IP qua route hiện tại của Loon
+    getIP(false, function(loonIP) {
 
         if (!loonIP) {
             $done();
@@ -83,19 +81,70 @@ getIP(true, function (networkIP) {
         }
 
 
-        // Nếu 2 IP giống nhau = chưa đi qua proxy
-        var vpnConnected = (loonIP !== networkIP);
+        // ------------------------------------
+        // Kiểm tra network vừa thay đổi
+        // ------------------------------------
+
+        var lastNetworkChange = Number(
+            $persistentStore.read(
+                NETWORK_CHANGE_KEY
+            ) || "0"
+        );
+
+        var networkRecentlyChanged =
+            (Date.now() - lastNetworkChange) < 8000;
 
 
-        var oldState =
+        // ------------------------------------
+        // Nếu network vừa đổi
+        // reset VPN state
+        // ------------------------------------
+
+        var state =
             $persistentStore.read(STATE_KEY) || "";
 
+        if (networkRecentlyChanged || state === "RESET") {
 
-        // Lần chạy đầu tiên
-        if (!oldState) {
+            // Sau network change:
+            // xác định trạng thái hiện tại nhưng
+            // KHÔNG gửi notification VPN.
+
+            if (loonIP === networkIP) {
+                $persistentStore.write(
+                    "OFF",
+                    STATE_KEY
+                );
+            } else {
+                $persistentStore.write(
+                    "ON",
+                    STATE_KEY
+                );
+            }
+
+            $done();
+            return;
+        }
+
+
+        // ------------------------------------
+        // Xác định trạng thái
+        // ------------------------------------
+
+        var vpnNow =
+            loonIP !== networkIP;
+
+        var vpnState =
+            vpnNow ? "ON" : "OFF";
+
+
+        // ------------------------------------
+        // State cũ
+        // ------------------------------------
+
+        if (!state || state === "RESET") {
 
             $persistentStore.write(
-                vpnConnected ? "ON" : "OFF",
+                vpnState,
                 STATE_KEY
             );
 
@@ -104,43 +153,33 @@ getIP(true, function (networkIP) {
         }
 
 
-        // Network vừa thay đổi?
-        var lastNetworkChange =
-            Number(
-                $persistentStore.read(
-                    "Loon_Last_Network_Change"
-                ) || "0"
-            );
-
-        var recentlyChanged =
-            (Date.now() - lastNetworkChange) < 10000;
-
-
-        // ==========================================
-        // VPN OFF -> ON
-        // ==========================================
+        // ------------------------------------
+        // OFF -> ON
+        // ------------------------------------
 
         if (
-            oldState === "OFF" &&
-            vpnConnected &&
-            !recentlyChanged
+            state === "OFF" &&
+            vpnState === "ON"
         ) {
 
             $notification.post(
                 "Loon VPN Connected",
                 network,
-                "Network: " + networkIP +
-                "\nLoon: " + loonIP
+                "Network: " +
+                networkIP +
+                "\nLoon: " +
+                loonIP
             );
         }
 
 
-        // ==========================================
-        // Lưu trạng thái mới
-        // ==========================================
+        // ------------------------------------
+        // ON -> OFF
+        // Không thông báo
+        // ------------------------------------
 
         $persistentStore.write(
-            vpnConnected ? "ON" : "OFF",
+            vpnState,
             STATE_KEY
         );
 
