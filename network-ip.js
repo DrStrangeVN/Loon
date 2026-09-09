@@ -1,5 +1,5 @@
 // Loon - Network IP Notification
-// Thông báo IP public khi Wi-Fi / 4G thay đổi
+// Thông báo Public IP khi Wi-Fi / 4G / 5G thay đổi
 
 var config = {};
 
@@ -20,45 +20,65 @@ if (!ssid || ssid.toLowerCase() === "cellular") {
     networkType = "Wi-Fi";
 }
 
-// Chờ mạng ổn định một chút trước khi kiểm tra IP
+// Chờ mạng ổn định sau khi chuyển mạng
 setTimeout(function () {
 
     $httpClient.get({
-        url: "https://api.ipify.org?format=json",
-        timeout: 8000
+        url: "https://api64.ipify.org",
+        timeout: 10000
     }, function (error, response, data) {
 
+        // Request lỗi
         if (error) {
             $notification.post(
                 "Loon",
                 networkType,
-                "Không lấy được Public IP\n" + error
+                "Lỗi kết nối IP: " + error
             );
 
             $done();
             return;
         }
 
-        try {
-            var result = JSON.parse(data);
-            var ip = result.ip || "Unknown";
-
+        // Kiểm tra response
+        if (!data) {
             $notification.post(
                 "Loon",
                 networkType,
-                "Public IP: " + ip
+                "API không trả về dữ liệu"
             );
 
-        } catch (e) {
-
-            $notification.post(
-                "Loon",
-                networkType,
-                "Không đọc được dữ liệu IP"
-            );
+            $done();
+            return;
         }
+
+        // Lấy IP dạng text
+        var ip = String(data).trim();
+
+        // Kiểm tra IP có hợp lệ tương đối
+        if (
+            ip.length < 7 ||
+            ip.indexOf("<") !== -1 ||
+            ip.indexOf("{") !== -1
+        ) {
+            $notification.post(
+                "Loon",
+                networkType,
+                "Dữ liệu IP không hợp lệ: " + ip.substring(0, 100)
+            );
+
+            $done();
+            return;
+        }
+
+        // Thành công
+        $notification.post(
+            "Loon",
+            networkType,
+            "Public IP: " + ip
+        );
 
         $done();
     });
 
-}, 2500);
+}, 3000);
