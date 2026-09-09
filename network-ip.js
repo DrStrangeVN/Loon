@@ -1,15 +1,15 @@
-// Loon Network Status + VPN Monitor
+// Loon Network Status + VPN IP Monitor
 // Wi-Fi / Cellular / VPN
-// Notification giống phong cách Quantumult X
+// No notification spam
 
-var STATE_KEY = "LoonNetworkStatus_v2";
+var STATE_KEY = "Loon_Network_IP_Monitor_v3";
 
 
-// ========================================
-// NETWORK INFO
-// ========================================
+// ==========================================
+// NETWORK
+// ==========================================
 
-function getNetworkInfo() {
+function getNetwork() {
 
     var config = {};
 
@@ -19,47 +19,25 @@ function getNetworkInfo() {
         config = {};
     }
 
-    var ssid = config.ssid || "";
+    var ssid = String(config.ssid || "");
 
     if (ssid && ssid.toLowerCase() !== "cellular") {
-
         return {
             type: "Wi-Fi",
-            label: "Wi-Fi"
+            name: ssid
         };
-
     }
 
     return {
         type: "Cellular",
-        label: "4G / 5G"
+        name: "4G / 5G"
     };
 }
 
 
-// ========================================
-// LOON RUNNING MODE
-// ========================================
-
-function getLoonMode() {
-
-    var config = {};
-
-    try {
-        config = JSON.parse($config.getConfig() || "{}");
-    } catch (e) {
-        config = {};
-    }
-
-    var mode = Number(config.running_model);
-
-    return mode;
-}
-
-
-// ========================================
-// GET IP
-// ========================================
+// ==========================================
+// GET PUBLIC IP
+// ==========================================
 
 function getIP(node, callback) {
 
@@ -86,9 +64,9 @@ function getIP(node, callback) {
 }
 
 
-// ========================================
+// ==========================================
 // TIME
-// ========================================
+// ==========================================
 
 function getTime() {
 
@@ -103,210 +81,181 @@ function getTime() {
 }
 
 
-// ========================================
-// NOTIFICATION
-// ========================================
+// ==========================================
+// SAVE
+// ==========================================
 
-function notifyNetwork(network, networkIP) {
-
-    var title = "Network Status Changed";
-
-    var subtitle =
-        network.type + ", " + (networkIP || "Unknown");
-
-    var content =
-        "Join network at " + getTime();
-
-    $notification.post(
-        title,
-        subtitle,
-        content
-    );
-}
-
-
-function notifyVPN(network, networkIP, loonIP, connected) {
-
-    var title;
-
-    if (connected) {
-        title = "Loon VPN Connected";
-    } else {
-        title = "Loon VPN Disconnected";
-    }
-
-    var content =
-        "Network: " + (networkIP || "Unknown") +
-        "\nLoon: " + (loonIP || "Unknown");
-
-    $notification.post(
-        title,
-        network.label,
-        content
-    );
-}
-
-
-// ========================================
-// MAIN CHECK
-// ========================================
-
-function check() {
-
-    var network = getNetworkInfo();
-    var mode = getLoonMode();
-
-    var oldStateText =
-        $persistentStore.read(STATE_KEY) || "";
-
-    var oldState = {};
-
-    try {
-        oldState = oldStateText
-            ? JSON.parse(oldStateText)
-            : {};
-    } catch (e) {
-        oldState = {};
-    }
-
-
-    var networkChanged =
-        oldState.networkType &&
-        oldState.networkType !== network.type;
-
-    var vpnChanged =
-        typeof oldState.vpnOn !== "undefined" &&
-        oldState.vpnOn !== (mode !== 0);
-
-
-    var vpnOn = mode !== 0;
-
-
-    // ====================================
-    // KHÔNG CÓ THAY ĐỔI
-    // ====================================
-
-    if (
-        oldStateText &&
-        !networkChanged &&
-        !vpnChanged
-    ) {
-
-        $done();
-        return;
-    }
-
-
-    // ====================================
-    // LẤY NETWORK IP
-    // ====================================
-
-    getIP("DIRECT", function (networkIP) {
-
-
-        // ==================================
-        // NETWORK CHANGE
-        // ==================================
-
-        if (networkChanged) {
-
-            notifyNetwork(
-                network,
-                networkIP
-            );
-
-        }
-
-
-        // ==================================
-        // VPN CHANGE
-        // ==================================
-
-        if (vpnChanged) {
-
-            getIP(null, function (loonIP) {
-
-                notifyVPN(
-                    network,
-                    networkIP,
-                    loonIP,
-                    vpnOn
-                );
-
-                saveState(
-                    network,
-                    vpnOn,
-                    networkIP
-                );
-
-            });
-
-            return;
-        }
-
-
-        // ==================================
-        // FIRST RUN
-        // ==================================
-
-        if (!oldStateText) {
-
-            saveState(
-                network,
-                vpnOn,
-                networkIP
-            );
-
-            $done();
-            return;
-        }
-
-
-        // ==================================
-        // NETWORK ONLY
-        // ==================================
-
-        saveState(
-            network,
-            vpnOn,
-            networkIP
-        );
-
-        $done();
-
-    });
-}
-
-
-// ========================================
-// SAVE STATE
-// ========================================
-
-function saveState(network, vpnOn, networkIP) {
+function saveState(network, networkIP, loonIP) {
 
     var state = {
-
-        networkType: network.type,
-
-        vpnOn: vpnOn,
-
+        network: network.type,
         networkIP: networkIP || "",
-
-        updated: Date.now()
-
+        loonIP: loonIP || ""
     };
 
     $persistentStore.write(
         JSON.stringify(state),
         STATE_KEY
     );
-
-    $done();
 }
 
 
-// ========================================
-// RUN
-// ========================================
+// ==========================================
+// LOAD
+// ==========================================
 
-check();
+function loadState() {
+
+    var raw = $persistentStore.read(STATE_KEY);
+
+    if (!raw) {
+        return null;
+    }
+
+    try {
+        return JSON.parse(raw);
+    } catch (e) {
+        return null;
+    }
+}
+
+
+// ==========================================
+// NETWORK NOTIFICATION
+// ==========================================
+
+function notifyNetwork(network, networkIP) {
+
+    $notification.post(
+        "Network Status Changed",
+        network.type + ", " + (networkIP || "Unknown"),
+        "Join network at " + getTime()
+    );
+}
+
+
+// ==========================================
+// VPN NOTIFICATION
+// ==========================================
+
+function notifyVPN(network, networkIP, loonIP) {
+
+    $notification.post(
+        "Loon VPN Connected",
+        network.type,
+        "Network: " + (networkIP || "Unknown") +
+        "\nLoon: " + (loonIP || "Unknown")
+    );
+}
+
+
+// ==========================================
+// MAIN
+// ==========================================
+
+function main() {
+
+    var network = getNetwork();
+
+    var oldState = loadState();
+
+    // --------------------------------------
+    // Get DIRECT IP
+    // --------------------------------------
+
+    getIP("DIRECT", function(networkIP) {
+
+        // ----------------------------------
+        // Get Loon routed IP
+        // ----------------------------------
+
+        getIP(null, function(loonIP) {
+
+            var oldNetwork = oldState
+                ? oldState.network
+                : "";
+
+            var oldNetworkIP = oldState
+                ? oldState.networkIP
+                : "";
+
+            var oldLoonIP = oldState
+                ? oldState.loonIP
+                : "";
+
+
+            // ==================================
+            // FIRST RUN
+            // ==================================
+
+            if (!oldState) {
+
+                saveState(
+                    network,
+                    networkIP,
+                    loonIP
+                );
+
+                $done();
+                return;
+            }
+
+
+            // ==================================
+            // NETWORK CHANGED
+            // ==================================
+
+            if (
+                network.type !== oldNetwork ||
+                networkIP !== oldNetworkIP
+            ) {
+
+                notifyNetwork(
+                    network,
+                    networkIP
+                );
+            }
+
+
+            // ==================================
+            // VPN / PROXY IP CHANGED
+            // ==================================
+
+            if (
+                loonIP &&
+                oldLoonIP &&
+                loonIP !== oldLoonIP &&
+                networkIP === oldNetworkIP
+            ) {
+
+                notifyVPN(
+                    network,
+                    networkIP,
+                    loonIP
+                );
+            }
+
+
+            // ==================================
+            // SAVE NEW STATE
+            // ==================================
+
+            saveState(
+                network,
+                networkIP,
+                loonIP
+            );
+
+            $done();
+
+        });
+
+    });
+}
+
+
+// ==========================================
+// START
+// ==========================================
+
+main();
