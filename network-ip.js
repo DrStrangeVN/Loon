@@ -1,12 +1,13 @@
-// Loon Network IP Monitor
-// Wi-Fi / 4G / 5G + VPN IP notification
+// Loon Network Status + VPN Monitor
+// Wi-Fi / Cellular / VPN
+// Notification giống phong cách Quantumult X
 
-var STORE_KEY = "LoonNetworkIPState";
+var STATE_KEY = "LoonNetworkStatus_v2";
 
 
-// ==============================
-// Lấy loại mạng
-// ==============================
+// ========================================
+// NETWORK INFO
+// ========================================
 
 function getNetworkInfo() {
 
@@ -21,22 +22,44 @@ function getNetworkInfo() {
     var ssid = config.ssid || "";
 
     if (ssid && ssid.toLowerCase() !== "cellular") {
+
         return {
             type: "Wi-Fi",
-            name: ssid
+            label: "Wi-Fi"
         };
+
     }
 
     return {
-        type: "4G / 5G",
-        name: "Cellular"
+        type: "Cellular",
+        label: "4G / 5G"
     };
 }
 
 
-// ==============================
-// Lấy IP
-// ==============================
+// ========================================
+// LOON RUNNING MODE
+// ========================================
+
+function getLoonMode() {
+
+    var config = {};
+
+    try {
+        config = JSON.parse($config.getConfig() || "{}");
+    } catch (e) {
+        config = {};
+    }
+
+    var mode = Number(config.running_model);
+
+    return mode;
+}
+
+
+// ========================================
+// GET IP
+// ========================================
 
 function getIP(node, callback) {
 
@@ -46,23 +69,14 @@ function getIP(node, callback) {
         node: node
     }, function (error, response, data) {
 
-        if (error) {
-            callback(null);
-            return;
-        }
-
-        if (!data) {
+        if (error || !data) {
             callback(null);
             return;
         }
 
         var ip = String(data).trim();
 
-        if (
-            !ip ||
-            ip.indexOf("<") !== -1 ||
-            ip.indexOf("{") !== -1
-        ) {
+        if (!ip) {
             callback(null);
             return;
         }
@@ -72,108 +86,227 @@ function getIP(node, callback) {
 }
 
 
-// ==============================
-// Gửi notification
-// ==============================
+// ========================================
+// TIME
+// ========================================
 
-function sendNotification(network, networkIP, loonIP) {
+function getTime() {
 
-    var content = "";
+    var d = new Date();
 
-    if (networkIP) {
-        content += "🌐 Network: " + networkIP;
-    } else {
-        content += "🌐 Network: —";
-    }
+    return d.toLocaleTimeString("en-US", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false
+    });
+}
 
-    if (loonIP) {
-        content += "\n🛡️ Loon: " + loonIP;
-    } else {
-        content += "\n🛡️ Loon: —";
-    }
+
+// ========================================
+// NOTIFICATION
+// ========================================
+
+function notifyNetwork(network, networkIP) {
+
+    var title = "Network Status Changed";
+
+    var subtitle =
+        network.type + ", " + (networkIP || "Unknown");
+
+    var content =
+        "Join network at " + getTime();
 
     $notification.post(
-        "Loon",
-        network.type,
+        title,
+        subtitle,
         content
     );
 }
 
 
-// ==============================
-// Kiểm tra trạng thái
-// ==============================
+function notifyVPN(network, networkIP, loonIP, connected) {
 
-function checkNetwork(forceNotify) {
+    var title;
+
+    if (connected) {
+        title = "Loon VPN Connected";
+    } else {
+        title = "Loon VPN Disconnected";
+    }
+
+    var content =
+        "Network: " + (networkIP || "Unknown") +
+        "\nLoon: " + (loonIP || "Unknown");
+
+    $notification.post(
+        title,
+        network.label,
+        content
+    );
+}
+
+
+// ========================================
+// MAIN CHECK
+// ========================================
+
+function check() {
 
     var network = getNetworkInfo();
+    var mode = getLoonMode();
 
-    var networkIP = null;
-    var loonIP = null;
+    var oldStateText =
+        $persistentStore.read(STATE_KEY) || "";
 
-    var finished = 0;
+    var oldState = {};
 
-    function finish() {
-
-        finished++;
-
-        if (finished < 2) {
-            return;
-        }
-
-        var state = {
-            type: network.type,
-            name: network.name,
-            networkIP: networkIP || "",
-            loonIP: loonIP || ""
-        };
-
-        var stateString = JSON.stringify(state);
-
-        var oldState = $persistentStore.read(STORE_KEY) || "";
-
-        // Chỉ thông báo khi trạng thái thực sự thay đổi
-        if (forceNotify || stateString !== oldState) {
-
-            $persistentStore.write(
-                stateString,
-                STORE_KEY
-            );
-
-            sendNotification(
-                network,
-                networkIP,
-                loonIP
-            );
-        }
-
-        $done();
+    try {
+        oldState = oldStateText
+            ? JSON.parse(oldStateText)
+            : {};
+    } catch (e) {
+        oldState = {};
     }
 
 
-    // IP mạng gốc
-    getIP("DIRECT", function (ip) {
+    var networkChanged =
+        oldState.networkType &&
+        oldState.networkType !== network.type;
 
-        networkIP = ip;
-
-        finish();
-
-    });
+    var vpnChanged =
+        typeof oldState.vpnOn !== "undefined" &&
+        oldState.vpnOn !== (mode !== 0);
 
 
-    // IP sau Loon
-    getIP(null, function (ip) {
+    var vpnOn = mode !== 0;
 
-        loonIP = ip;
 
-        finish();
+    // ====================================
+    // KHÔNG CÓ THAY ĐỔI
+    // ====================================
+
+    if (
+        oldStateText &&
+        !networkChanged &&
+        !vpnChanged
+    ) {
+
+        $done();
+        return;
+    }
+
+
+    // ====================================
+    // LẤY NETWORK IP
+    // ====================================
+
+    getIP("DIRECT", function (networkIP) {
+
+
+        // ==================================
+        // NETWORK CHANGE
+        // ==================================
+
+        if (networkChanged) {
+
+            notifyNetwork(
+                network,
+                networkIP
+            );
+
+        }
+
+
+        // ==================================
+        // VPN CHANGE
+        // ==================================
+
+        if (vpnChanged) {
+
+            getIP(null, function (loonIP) {
+
+                notifyVPN(
+                    network,
+                    networkIP,
+                    loonIP,
+                    vpnOn
+                );
+
+                saveState(
+                    network,
+                    vpnOn,
+                    networkIP
+                );
+
+            });
+
+            return;
+        }
+
+
+        // ==================================
+        // FIRST RUN
+        // ==================================
+
+        if (!oldStateText) {
+
+            saveState(
+                network,
+                vpnOn,
+                networkIP
+            );
+
+            $done();
+            return;
+        }
+
+
+        // ==================================
+        // NETWORK ONLY
+        // ==================================
+
+        saveState(
+            network,
+            vpnOn,
+            networkIP
+        );
+
+        $done();
 
     });
 }
 
 
-// ==============================
-// Chạy
-// ==============================
+// ========================================
+// SAVE STATE
+// ========================================
 
-checkNetwork(true);
+function saveState(network, vpnOn, networkIP) {
+
+    var state = {
+
+        networkType: network.type,
+
+        vpnOn: vpnOn,
+
+        networkIP: networkIP || "",
+
+        updated: Date.now()
+
+    };
+
+    $persistentStore.write(
+        JSON.stringify(state),
+        STATE_KEY
+    );
+
+    $done();
+}
+
+
+// ========================================
+// RUN
+// ========================================
+
+check();
