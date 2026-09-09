@@ -1,99 +1,82 @@
 // Loon Network Status
-// Wi-Fi / Cellular
-// Chỉ chạy khi network thay đổi
+// Wi-Fi / 4G / 5G
+// Chỉ chạy khi network-changed
 
-var STATE_KEY = "Loon_Network_State";
+var NETWORK_CHANGE_KEY = "Loon_Network_Changed";
 
-function getNetwork() {
-
+function getNetworkType() {
     var config = {};
 
     try {
         config = JSON.parse($config.getConfig() || "{}");
-    } catch (e) {
-        config = {};
-    }
+    } catch (e) {}
 
     var ssid = String(config.ssid || "");
 
     if (ssid && ssid.toLowerCase() !== "cellular") {
-        return {
-            type: "Wi-Fi"
-        };
+        return "Wi-Fi";
     }
 
-    return {
-        type: "4G / 5G"
-    };
+    return "4G / 5G";
 }
 
-
-function getIP(callback) {
+function getIP(retry) {
 
     $httpClient.get({
         url: "https://api64.ipify.org",
         timeout: 5000,
         node: "DIRECT"
-    }, function (error, response, data) {
+    }, function(error, response, data) {
 
-        if (error || !data) {
-            callback(null);
+        if (!error && data) {
+
+            var ip = String(data).trim();
+
+            if (ip) {
+
+                var network = getNetworkType();
+
+                // Đánh dấu thời điểm network thay đổi
+                $persistentStore.write(
+                    String(Date.now()),
+                    NETWORK_CHANGE_KEY
+                );
+
+                // Reset VPN monitor
+                $persistentStore.write(
+                    "RESET",
+                    "Loon_VPN_State"
+                );
+
+                $notification.post(
+                    "Network Status Changed",
+                    network + ", " + ip,
+                    "Join network at " +
+                    new Date().toLocaleTimeString(
+                        "en-US",
+                        {
+                            hour12: false
+                        }
+                    )
+                );
+
+                $done();
+                return;
+            }
+        }
+
+        // Mạng vừa chuyển, chờ thêm rồi thử lại
+        if (retry > 0) {
+
+            setTimeout(function() {
+                getIP(retry - 1);
+            }, 1500);
+
             return;
         }
 
-        var ip = String(data).trim();
-
-        if (!ip) {
-            callback(null);
-            return;
-        }
-
-        callback(ip);
-    });
-}
-
-
-function getTime() {
-
-    var d = new Date();
-
-    return d.toLocaleTimeString("en-US", {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: false
-    });
-}
-
-
-var network = getNetwork();
-
-
-getIP(function (ip) {
-
-    if (!ip) {
         $done();
-        return;
-    }
+    });
+}
 
-    // 保存最近一次网络变化时间
-    $persistentStore.write(
-        String(Date.now()),
-        "Loon_Last_Network_Change"
-    );
-
-    // 保存 Network IP
-    $persistentStore.write(
-        ip,
-        "Loon_Network_IP"
-    );
-
-    // Notification
-    $notification.post(
-        "Network Status Changed",
-        network.type + ", " + ip,
-        "Join network at " + getTime()
-    );
-
-    $done();
-});
+getIP(3);
