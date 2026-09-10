@@ -1,26 +1,26 @@
 // Loon VPN Connection Monitor
-// Detect VPN OFF -> ON and notify once for each new connection.
+// Detect real VPN connection by comparing DIRECT IP and Loon IP.
 
 var STATE_KEY = "Loon_VPN_CONNECTION_STATE";
-var LAST_IP_KEY = "Loon_VPN_CONNECTION_IP";
+var LAST_IP_KEY = "Loon_VPN_LAST_IP";
 
 function getIP(node, callback) {
-    var opt = {
+    var options = {
         url: "https://api64.ipify.org",
         timeout: 8000
     };
 
     if (node) {
-        opt.node = node;
+        options.node = node;
     }
 
-    $httpClient.get(opt, function(error, response, data) {
-        if (error) {
+    $httpClient.get(options, function(error, response, data) {
+        if (error || !data) {
             callback("");
             return;
         }
 
-        callback(String(data || "").trim());
+        callback(String(data).trim());
     });
 }
 
@@ -32,45 +32,64 @@ try {
     config = {};
 }
 
-var runningModel = Number(config.running_model || 0);
-
-// 0 = DIRECT
-// 1 = RULE
-// 2 = GLOBAL PROXY
-var vpnOn = runningModel !== 0;
 
 // --------------------------------------------------
-// VPN OFF
-// --------------------------------------------------
-
-if (!vpnOn) {
-    $persistentStore.write("OFF", STATE_KEY);
-    $done();
-    return;
-}
-
-// --------------------------------------------------
-// VPN ON
+// GET DIRECT IP
 // --------------------------------------------------
 
 getIP("DIRECT", function(directIP) {
 
-    getIP(null, function(vpnIP) {
+    if (!directIP) {
+        $done();
+        return;
+    }
 
-        if (!vpnIP) {
+
+    // --------------------------------------------------
+    // GET IP THROUGH LOON
+    // --------------------------------------------------
+
+    getIP(null, function(loonIP) {
+
+        if (!loonIP) {
             $done();
             return;
         }
 
+
+        // --------------------------------------------------
+        // DETECT REAL VPN STATE
+        // --------------------------------------------------
+
+        var vpnConnected = (directIP !== loonIP);
+
         var oldState =
             $persistentStore.read(STATE_KEY) || "OFF";
 
-        var lastIP =
-            $persistentStore.read(LAST_IP_KEY) || "";
 
-        // ------------------------------------------
-        // NEW VPN SESSION
-        // ------------------------------------------
+        // --------------------------------------------------
+        // VPN OFF
+        // --------------------------------------------------
+
+        if (!vpnConnected) {
+
+            // IMPORTANT:
+            // Reset state every time DIRECT IP == LOON IP
+
+            if (oldState !== "OFF") {
+                $persistentStore.write("OFF", STATE_KEY);
+            }
+
+            $persistentStore.write(loonIP, LAST_IP_KEY);
+
+            $done();
+            return;
+        }
+
+
+        // --------------------------------------------------
+        // VPN ON
+        // --------------------------------------------------
 
         if (oldState !== "ON") {
 
@@ -86,33 +105,40 @@ getIP("DIRECT", function(directIP) {
                 network = "4G/5G";
             }
 
-            var nodeName = "";
 
-            // Try to get the currently selected policy.
+            // Get currently selected FINAL VPN policy
+
+            var policy = "FINAL VPN";
+
             try {
-                var finalPolicy =
+                var selected =
                     $config.getSelectedPolicy("FINAL VPN");
 
-                if (finalPolicy) {
-                    nodeName = String(finalPolicy);
+                if (selected) {
+                    policy = String(selected);
                 }
             } catch (e) {}
 
-            if (!nodeName) {
-                nodeName = "FINAL VPN";
-            }
+
+            // --------------------------------------------------
+            // NOTIFICATION
+            // --------------------------------------------------
 
             $notification.post(
                 "🟢 Loon VPN Connected",
-                nodeName,
+                policy,
                 "Network: " + network +
-                "\nIP: " + vpnIP
+                "\nIP: " + loonIP
             );
         }
 
-        // Save current state
+
+        // --------------------------------------------------
+        // SAVE STATE
+        // --------------------------------------------------
+
         $persistentStore.write("ON", STATE_KEY);
-        $persistentStore.write(vpnIP, LAST_IP_KEY);
+        $persistentStore.write(loonIP, LAST_IP_KEY);
 
         $done();
     });
