@@ -1,185 +1,201 @@
 // Loon VPN Connection Monitor
-// Notify when VPN starts a NEW connection session.
-// Network changes (Wi-Fi / Cellular) are handled separately
-// by network-ip.js and are not modified here.
+// Detect VPN state by comparing DIRECT IP and current Loon IP.
+// Network change notification remains handled by network-ip.js.
 
-var STATE_KEY = "Loon_VPN_LAST_SESSION";
+var STATE_KEY = "Loon_VPN_STATE";
 var LAST_IP_KEY = "Loon_VPN_LAST_IP";
-var LAST_CHECK_KEY = "Loon_VPN_LAST_CHECK";
 
-// How long without seeing the VPN is considered a new session.
-// Cron is expected to run every 5 seconds.
-var SESSION_GAP = 12000;
+var TEST_URL =
+    "https://api64.ipify.org/?loon_check=" +
+    Date.now();
 
 
 function getIP(node, callback) {
 
     var options = {
-        url: "https://api64.ipify.org",
+        url: TEST_URL,
         timeout: 8000
     };
 
-    if (node) {
+    if (node !== null) {
         options.node = node;
     }
 
     $httpClient.get(options, function(error, response, data) {
 
         if (error || !data) {
-            callback("");
+            callback(null);
             return;
         }
 
-        callback(String(data).trim());
+        var ip = String(data).trim();
+
+        if (!ip) {
+            callback(null);
+            return;
+        }
+
+        callback(ip);
     });
 }
 
 
 function getNetwork() {
 
-    var network = "Wi-Fi";
-
     try {
 
-        var config =
+        var conf =
             JSON.parse($config.getConfig() || "{}");
 
         var ssid =
-            String(config.ssid || "").toLowerCase();
+            String(conf.ssid || "").toLowerCase();
 
         if (
             ssid.indexOf("cellular") >= 0 ||
             ssid.indexOf("4g") >= 0 ||
             ssid.indexOf("5g") >= 0
         ) {
-            network = "4G/5G";
+            return "4G/5G";
         }
 
     } catch (e) {}
 
-    return network;
+    return "Wi-Fi";
 }
 
 
-function notifyVPN(ip) {
-
-    var network = getNetwork();
-
-    var policy = "FINAL VPN";
+function getPolicy() {
 
     try {
 
-        var config =
+        var conf =
             JSON.parse($config.getConfig() || "{}");
 
-        if (config.final) {
-            policy = String(config.final);
+        /*
+         * Your FINAL rule is:
+         *
+         * FINAL,INTERNET
+         *
+         * Therefore use the actual final policy
+         * instead of hard-coding FINAL VPN.
+         */
+
+        if (conf.final) {
+            return String(conf.final);
         }
 
     } catch (e) {}
 
+    return "INTERNET";
+}
+
+
+function notify(ip) {
 
     $notification.post(
         "🟢 Loon VPN Connected",
-        policy,
-        "Network: " + network +
-        "\nIP: " + ip
+        getPolicy(),
+        "Network: " +
+        getNetwork() +
+        "\nIP: " +
+        ip
     );
 }
 
 
 /*
- * Get current time.
+ * First request:
+ * absolutely DIRECT.
  */
-var now = Date.now();
+getIP("DIRECT", function(directIP) {
 
-
-/*
- * Get current VPN public IP.
- *
- * null = request goes through current Loon policy.
- */
-getIP(null, function(vpnIP) {
-
-    if (!vpnIP) {
+    if (!directIP) {
         $done();
         return;
     }
 
 
     /*
-     * Read previous information.
+     * Second request:
+     * current Loon connection.
+     *
+     * null is intentional:
+     * it follows the current Loon routing state.
      */
-    var lastCheck =
-        Number(
-            $persistentStore.read(LAST_CHECK_KEY) || "0"
+    getIP(null, function(currentIP) {
+
+        if (!currentIP) {
+            $done();
+            return;
+        }
+
+
+        /*
+         * VPN state.
+         */
+        var vpnConnected =
+            directIP !== currentIP;
+
+
+        var oldState =
+            $persistentStore.read(STATE_KEY) || "OFF";
+
+
+        /*
+         * ============================
+         * VPN OFF
+         * ============================
+         */
+
+        if (!vpnConnected) {
+
+            /*
+             * This is the important part:
+             * every cron execution while VPN is OFF
+             * forces the persistent state back to OFF.
+             */
+            $persistentStore.write(
+                "OFF",
+                STATE_KEY
+            );
+
+            $persistentStore.write(
+                currentIP,
+                LAST_IP_KEY
+            );
+
+            $done();
+            return;
+        }
+
+
+        /*
+         * ============================
+         * VPN ON
+         * ============================
+         */
+
+        if (oldState !== "ON") {
+
+            notify(currentIP);
+        }
+
+
+        /*
+         * Remember that this VPN session
+         * is now active.
+         */
+        $persistentStore.write(
+            "ON",
+            STATE_KEY
         );
 
-    var lastIP =
-        $persistentStore.read(LAST_IP_KEY) || "";
+        $persistentStore.write(
+            currentIP,
+            LAST_IP_KEY
+        );
 
 
-    /*
-     * Determine whether this is a NEW VPN session.
-     *
-     * Case 1:
-     * First time script runs.
-     *
-     * Case 2:
-     * There has been a gap long enough since
-     * the previous VPN check.
-     *
-     * Case 3:
-     * VPN public IP changed.
-     *
-     * This means reconnecting can trigger again
-     * even when Loon did not execute a script
-     * during the OFF period.
-     */
-    var newSession = false;
-
-
-    if (!lastCheck) {
-
-        newSession = true;
-
-    } else if ((now - lastCheck) > SESSION_GAP) {
-
-        newSession = true;
-
-    } else if (lastIP && lastIP !== vpnIP) {
-
-        newSession = true;
-    }
-
-
-    /*
-     * Notify only once for this session.
-     */
-    if (newSession) {
-
-        notifyVPN(vpnIP);
-    }
-
-
-    /*
-     * Save current session information.
-     */
-    $persistentStore.write(
-        String(now),
-        LAST_CHECK_KEY
-    );
-
-    $persistentStore.write(
-        vpnIP,
-        LAST_IP_KEY
-    );
-
-    $persistentStore.write(
-        "ON",
-        STATE_KEY
-    );
-
-
-    $done();
+        $done();
+    });
 });
