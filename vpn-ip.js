@@ -1,60 +1,155 @@
-// Loon VPN Manual Test
+// Loon VPN Connected Monitor
+// Loon 3.5.0+
+// Phát hiện OFF -> ON và báo Public IP một lần
 
-function getIP(node, callback) {
-    var opt = {
-        url: "https://api64.ipify.org",
-        timeout: 8000
-    };
+var STATE_KEY = "Loon_VPN_Connect_State";
+var IP_KEY = "Loon_VPN_Last_IP";
 
-    if (node) {
-        opt.node = node;
+function getConfig() {
+    try {
+        return JSON.parse($config.getConfig() || "{}");
+    } catch (e) {
+        return {};
+    }
+}
+
+function getNetwork(config) {
+    var ssid = String(config.ssid || "");
+
+    if (ssid && ssid.toLowerCase() !== "cellular") {
+        return "Wi-Fi";
     }
 
-    $httpClient.get(opt, function(error, response, data) {
-        if (error) {
-            callback("ERROR: " + error);
+    return "4G / 5G";
+}
+
+function getIP(node, callback) {
+    $httpClient.get({
+        url: "https://api64.ipify.org",
+        timeout: 5000,
+        node: node
+    }, function (error, response, data) {
+
+        if (error || !data) {
+            callback(null);
             return;
         }
 
-        callback(String(data || "").trim());
+        var ip = String(data).trim();
+
+        if (!ip) {
+            callback(null);
+            return;
+        }
+
+        callback(ip);
     });
 }
 
-var config = {};
 
-try {
-    config = JSON.parse($config.getConfig() || "{}");
-} catch (e) {}
+// ==========================================
+// MAIN
+// ==========================================
 
-var env = {};
+var config = getConfig();
 
-try {
-    env = $environment || {};
-} catch (e) {}
+var runningModel = Number(config.running_model || 0);
 
-var params = env.params || {};
+// 0 = Direct
+// 1 = Rule
+// 2 = Global Proxy
+var vpnOn = (runningModel === 1 || runningModel === 2);
 
-getIP("DIRECT", function(directIP) {
+var oldState =
+    $persistentStore.read(STATE_KEY) || "OFF";
 
-    getIP(null, function(currentIP) {
 
-        var message =
-            "DIRECT IP: " + directIP +
-            "\nCURRENT IP: " + currentIP +
-            "\nModel: " + String(config.running_model) +
-            "\nSSID: " + String(config.ssid || "") +
-            "\nFinal: " + String(config.final || "") +
-            "\nNode: " + String(params.node || "") +
-            "\nPolicy: " + String(params.policyGroup || "");
+// ==========================================
+// VPN OFF
+// ==========================================
 
-        console.log(message);
+if (!vpnOn) {
 
-        $notification.post(
-            "Loon VPN Test",
-            "Model: " + String(config.running_model),
-            message
-        );
+    if (oldState !== "OFF") {
+        $persistentStore.write("OFF", STATE_KEY);
+    }
 
+    $done();
+    return;
+}
+
+
+// ==========================================
+// VPN ON
+// ==========================================
+
+// Nếu đã ON từ trước thì không báo lại
+if (oldState === "ON") {
+    $done();
+    return;
+}
+
+
+// ==========================================
+// VPN vừa chuyển OFF -> ON
+// Lấy IP thực tế qua Loon
+// ==========================================
+
+getIP(null, function (loonIP) {
+
+    if (!loonIP) {
+
+        // Không đổi state để lần cron kế tiếp thử lại
         $done();
-    });
+        return;
+    }
+
+    var network = getNetwork(config);
+
+    var oldIP =
+        $persistentStore.read(IP_KEY) || "";
+
+    var policy = "";
+
+    try {
+        policy =
+            $config.getSelectedPolicy("🅵🅸🅽🅰🅻 🆅🅿🅽") || "";
+    } catch (e) {
+        policy = "";
+    }
+
+
+    // ======================================
+    // Notification
+    // ======================================
+
+    var subtitle =
+        policy ? policy : "VPN";
+
+    var content =
+        "Network: " + network +
+        "\nIP: " + loonIP;
+
+    $notification.post(
+        "🟢 Loon VPN Connected",
+        subtitle,
+        content
+    );
+
+
+    // ======================================
+    // Save state
+    // ======================================
+
+    $persistentStore.write(
+        "ON",
+        STATE_KEY
+    );
+
+    $persistentStore.write(
+        loonIP,
+        IP_KEY
+    );
+
+    $done();
 });
