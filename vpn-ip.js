@@ -1,155 +1,102 @@
-// Loon VPN Connected Monitor
-// Loon 3.5.0+
-// Phát hiện OFF -> ON và báo Public IP một lần
+// Loon VPN Connect Monitor
+// Detect every new VPN connection session.
+// Keep network-changed notification independent.
 
-var STATE_KEY = "Loon_VPN_Connect_State";
-var IP_KEY = "Loon_VPN_Last_IP";
-
-function getConfig() {
-    try {
-        return JSON.parse($config.getConfig() || "{}");
-    } catch (e) {
-        return {};
-    }
-}
-
-function getNetwork(config) {
-    var ssid = String(config.ssid || "");
-
-    if (ssid && ssid.toLowerCase() !== "cellular") {
-        return "Wi-Fi";
-    }
-
-    return "4G / 5G";
-}
+var STATE_KEY = "Loon_VPN_SESSION_STATE";
+var IP_KEY = "Loon_VPN_LAST_IP";
 
 function getIP(node, callback) {
-    $httpClient.get({
+    var opt = {
         url: "https://api64.ipify.org",
-        timeout: 5000,
-        node: node
-    }, function (error, response, data) {
+        timeout: 8000
+    };
 
-        if (error || !data) {
-            callback(null);
+    if (node) {
+        opt.node = node;
+    }
+
+    $httpClient.get(opt, function(error, response, data) {
+        if (error) {
+            callback("");
             return;
         }
 
-        var ip = String(data).trim();
-
-        if (!ip) {
-            callback(null);
-            return;
-        }
-
-        callback(ip);
+        callback(String(data || "").trim());
     });
 }
 
+var config = {};
 
-// ==========================================
-// MAIN
-// ==========================================
+try {
+    config = JSON.parse($config.getConfig() || "{}");
+} catch (e) {
+    config = {};
+}
 
-var config = getConfig();
+var model = Number(config.running_model || 0);
 
-var runningModel = Number(config.running_model || 0);
+// 0 = DIRECT
+// 1 = RULE
+// 2 = GLOBAL PROXY
+var vpnActive = model !== 0;
 
-// 0 = Direct
-// 1 = Rule
-// 2 = Global Proxy
-var vpnOn = (runningModel === 1 || runningModel === 2);
-
-var oldState =
-    $persistentStore.read(STATE_KEY) || "OFF";
-
-
-// ==========================================
 // VPN OFF
-// ==========================================
-
-if (!vpnOn) {
-
-    if (oldState !== "OFF") {
-        $persistentStore.write("OFF", STATE_KEY);
-    }
-
+// Reset the session so the next ON becomes a new session.
+if (!vpnActive) {
+    $persistentStore.write("OFF", STATE_KEY);
     $done();
     return;
 }
 
-
-// ==========================================
 // VPN ON
-// ==========================================
+getIP("DIRECT", function(directIP) {
 
-// Nếu đã ON từ trước thì không báo lại
-if (oldState === "ON") {
-    $done();
-    return;
-}
+    getIP(null, function(currentIP) {
 
+        if (!currentIP || currentIP.indexOf("ERROR") === 0) {
+            $done();
+            return;
+        }
 
-// ==========================================
-// VPN vừa chuyển OFF -> ON
-// Lấy IP thực tế qua Loon
-// ==========================================
+        var oldState = $persistentStore.read(STATE_KEY) || "OFF";
+        var lastIP = $persistentStore.read(IP_KEY) || "";
 
-getIP(null, function (loonIP) {
+        /*
+         * New VPN session:
+         *
+         * OFF -> ON
+         *
+         * We intentionally do NOT compare IP here.
+         * Reconnecting to the same node/IP must still notify.
+         */
+        if (oldState !== "ON") {
 
-    if (!loonIP) {
+            var network = "Wi-Fi";
 
-        // Không đổi state để lần cron kế tiếp thử lại
+            if (config.ssid === "cellular") {
+                network = "4G/5G";
+            }
+
+            var selectedNode = "";
+
+            try {
+                selectedNode =
+                    String(config["FINAL VPN"] || "") ||
+                    String(config.final || "");
+            } catch (e) {}
+
+            $notification.post(
+                "🟢 Loon VPN Connected",
+                selectedNode || "Loon VPN",
+                "Network: " + network +
+                "\nIP: " + currentIP
+            );
+        }
+
+        // Save current VPN session
+        $persistentStore.write("ON", STATE_KEY);
+        $persistentStore.write(currentIP, IP_KEY);
+
         $done();
-        return;
-    }
-
-    var network = getNetwork(config);
-
-    var oldIP =
-        $persistentStore.read(IP_KEY) || "";
-
-    var policy = "";
-
-    try {
-        policy =
-            $config.getSelectedPolicy("🅵🅸🅽🅰🅻 🆅🅿🅽") || "";
-    } catch (e) {
-        policy = "";
-    }
-
-
-    // ======================================
-    // Notification
-    // ======================================
-
-    var subtitle =
-        policy ? policy : "VPN";
-
-    var content =
-        "Network: " + network +
-        "\nIP: " + loonIP;
-
-    $notification.post(
-        "🟢 Loon VPN Connected",
-        subtitle,
-        content
-    );
-
-
-    // ======================================
-    // Save state
-    // ======================================
-
-    $persistentStore.write(
-        "ON",
-        STATE_KEY
-    );
-
-    $persistentStore.write(
-        loonIP,
-        IP_KEY
-    );
-
-    $done();
+    });
 });
